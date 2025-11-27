@@ -1,13 +1,14 @@
-# @title 💎 DASHBOARD V24: FIX FINALE (Crash-Proof)
+# @title 💎 DASHBOARD V25: FIX DEFINITIVO MINUTI
 # @markdown 1. Premi Play ▶️.
-# @markdown 2. Attendi il caricamento dei menu.
-# @markdown 3. Seleziona tutto e premi AVVIA.
+# @markdown 2. Seleziona tutto e premi AVVIA.
 
 import sys
 import subprocess
 import os
+import re
+import warnings
 
-# Installazione librerie
+# Installazione silenziosa
 try:
     import lifelines
 except ImportError:
@@ -21,8 +22,6 @@ import ipywidgets as widgets
 from IPython.display import display, clear_output
 from lifelines import KaplanMeierFitter
 from scipy.stats import poisson
-import warnings
-import re
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
@@ -81,6 +80,18 @@ def load_dataset(nome_file):
     except Exception as e:
         return pd.DataFrame()
 
+def on_file_change(change):
+    global global_df
+    if change['new']:
+        with out:
+            print(f"⏳ Caricamento {change['new']}...")
+            global_df = load_dataset(change['new'])
+            if not global_df.empty:
+                paesi = sorted(global_df['PAESE'].unique()) if 'PAESE' in global_df.columns else []
+                w_paese.options = paesi
+                if paesi: w_paese.value = paesi[0]
+                print(f"✅ File caricato: {len(global_df)} righe.")
+
 # ==========================================
 # 2. WIDGETS
 # ==========================================
@@ -93,23 +104,8 @@ w_lega = widgets.Dropdown(description='2. 🏆 Lega:', style=style, layout=layou
 w_home = widgets.Dropdown(description='3. 🏠 Casa:', style=style, layout=layout)
 w_away = widgets.Dropdown(description='4. ✈️ Ospite:', style=style, layout=layout)
 
-btn_run = widgets.Button(description="🚀 AVVIA ANALISI", button_style='primary', layout=layout)
+btn_run = widgets.Button(description="🚀 AVVIA ANALISI", button_style='primary', layout=widgets.Layout(width='100%', margin='15px 0px 0px 0px'))
 out = widgets.Output()
-
-def on_file_change(change):
-    global global_df
-    if change['new'] and change['new'] != 'Nessun file trovato':
-        with out:
-            # clear_output()
-            print(f"⏳ Caricamento {change['new']}...")
-            global_df = load_dataset(change['new'])
-            if not global_df.empty:
-                paesi = sorted(global_df['PAESE'].unique()) if 'PAESE' in global_df.columns else []
-                w_paese.options = paesi
-                if paesi: w_paese.value = paesi[0]
-                print(f"✅ File caricato: {len(global_df)} righe.")
-            else:
-                print("❌ Errore caricamento.")
 
 def update_leghe(*args):
     if not global_df.empty and w_paese.value:
@@ -126,14 +122,12 @@ def update_squadre(*args):
         if len(teams) > 1:
             w_home.value = teams[0]
             w_away.value = teams[1]
-        elif len(teams) == 1:
-             w_home.value = teams[0]
 
 w_file.observe(on_file_change, names='value')
 w_paese.observe(update_leghe, names='value')
 w_lega.observe(update_squadre, names='value')
 
-if available_files and available_files[0] != 'Nessun file trovato':
+if available_files:
     on_file_change({'new': available_files[0], 'type': 'change', 'name': 'value'})
 
 # ==========================================
@@ -142,42 +136,42 @@ if available_files and available_files[0] != 'Nessun file trovato':
 def run_analysis(b):
     with out:
         clear_output()
-        if global_df.empty: return print("❌ Nessun dato caricato.")
+        if global_df.empty: return print("❌ Nessun dato.")
         
         sel_p, sel_l = w_paese.value, w_lega.value
         sel_h, sel_a = w_home.value, w_away.value
         
-        if not sel_h or not sel_a:
-            print("⚠️ Seleziona le squadre.")
-            return
-
         print(f"⚙️ ELABORAZIONE: {sel_h} vs {sel_a} ({sel_p} - {sel_l})...\n")
         
         df_league = global_df[(global_df['PAESE'] == sel_p) & (global_df['LEGA'] == sel_l)].copy()
         intervals = ['0-15', '16-30', '31-45', '46-60', '61-75', '76-90']
         
+        # FUNZIONE ESTRAZIONE MINUTI (ROBUSTA)
         def get_minutes(val):
             if pd.isna(val): return []
-            s = str(val).replace(',', '.').replace(';', ' ')
-            nums = re.findall(r"[-+]?\d*\.\d+|\d+", s)
+            # Pulisce stringa da caratteri non numerici (tranne punto e virgola che diventano spazi)
+            s = str(val).replace(',', ' ').replace(';', ' ').replace('+', ' ').replace('"', '')
+            # Estrae solo numeri
+            nums = re.findall(r'\d+', s)
             res = []
             for x in nums:
                 try:
-                    n = int(float(x))
-                    if 0 <= n <= 130: res.append(n)
-                except: pass
+                    n = int(x)
+                    # Filtro valori validi per un minuto di gioco
+                    if 0 <= n <= 130: 
+                        res.append(n)
+                except: 
+                    pass
             return res
 
         c_h = 'GOALMINH' if 'GOALMINH' in df_league.columns else 'GOALMINCASA'
         c_a = 'GOALMINA' if 'GOALMINA' in df_league.columns else 'GOALMINOSPITE'
 
-        # Accumulatori
         goals_h = {'FT': 0, 'HT': 0, 'S_FT': 0, 'S_HT': 0}
         goals_a = {'FT': 0, 'HT': 0, 'S_FT': 0, 'S_HT': 0}
         match_h, match_a = 0, 0
-        times_h, times_a, times_league = [], [], []
+        times_h, times_a = [], []
         
-        # Stats Heatmap
         stats_match = {
             sel_h: {'F': {i:0 for i in intervals}, 'S': {i:0 for i in intervals}},
             sel_a: {'F': {i:0 for i in intervals}, 'S': {i:0 for i in intervals}}
@@ -188,39 +182,36 @@ def run_analysis(b):
             min_h = get_minutes(row.get(c_h))
             min_a = get_minutes(row.get(c_a))
             
-            # Dati Lega (per Media)
-            if min_h: times_league.append(min(min_h))
-            if min_a: times_league.append(min(min_a))
-
-            # Heatmap
+            # Heatmap Logic
             if h in stats_match:
-                for m in min_h: 
+                for m in min_h:
                     idx = min(5, (m-1)//15)
+                    # Fix 46' pt vs st
                     if m > 45 and m <= 60 and idx < 3: idx = 3
                     stats_match[h]['F'][intervals[idx]] += 1
-                for m in min_a: 
+                for m in min_a:
                     idx = min(5, (m-1)//15)
                     if m > 45 and m <= 60 and idx < 3: idx = 3
                     stats_match[h]['S'][intervals[idx]] += 1
             
             if a in stats_match:
-                for m in min_a: 
+                for m in min_a:
                     idx = min(5, (m-1)//15)
                     if m > 45 and m <= 60 and idx < 3: idx = 3
                     stats_match[a]['F'][intervals[idx]] += 1
-                for m in min_h: 
+                for m in min_h:
                     idx = min(5, (m-1)//15)
                     if m > 45 and m <= 60 and idx < 3: idx = 3
                     stats_match[a]['S'][intervals[idx]] += 1
 
-            # Dati Match
+            # Stats Medie & Poisson
             if h == sel_h:
                 match_h += 1
                 goals_h['FT'] += len(min_h)
                 goals_h['HT'] += len([x for x in min_h if x <= 45])
                 goals_h['S_FT'] += len(min_a)
                 goals_h['S_HT'] += len([x for x in min_a if x <= 45])
-                if min_h: times_h.append(min(min_h))
+                times_h.extend(min_h)
             
             if a == sel_a:
                 match_a += 1
@@ -228,11 +219,100 @@ def run_analysis(b):
                 goals_a['HT'] += len([x for x in min_a if x <= 45])
                 goals_a['S_FT'] += len(min_h)
                 goals_a['S_HT'] += len([x for x in min_h if x <= 45])
-                if min_a: times_a.append(min(min_a))
+                times_a.extend(min_a)
 
-        # Medie Sicure (Diviso 0 check)
+        # Medie Sicure
         def safe_div(n, d): return n / d if d > 0 else 0
 
         avg_h_ft = safe_div(goals_h['FT'], match_h)
         avg_h_ht = safe_div(goals_h['HT'], match_h)
-        avg_h_conc_ft = safe_div
+        avg_h_conc_ft = safe_div(goals_h['S_FT'], match_h)
+        avg_h_conc_ht = safe_div(goals_h['S_HT'], match_h)
+
+        avg_a_ft = safe_div(goals_a['FT'], match_a)
+        avg_a_ht = safe_div(goals_a['HT'], match_a)
+        avg_a_conc_ft = safe_div(goals_a['S_FT'], match_a)
+        avg_a_conc_ht = safe_div(goals_a['S_HT'], match_a)
+
+        print(f"\n📊 STATISTICHE MEDIE (Casa vs Fuori)")
+        print(f"{sel_h:<20} | Fatti: {avg_h_ht:.2f} (HT) - {avg_h_ft:.2f} (FT) | Subiti: {avg_h_conc_ht:.2f} (HT) - {avg_h_conc_ft:.2f} (FT)")
+        print(f"{sel_a:<20} | Fatti: {avg_a_ht:.2f} (HT) - {avg_a_ft:.2f} (FT) | Subiti: {avg_a_conc_ht:.2f} (HT) - {avg_a_conc_ft:.2f} (FT)")
+
+        # Poisson
+        exp_h_ft = (avg_h_ft + avg_a_conc_ft) / 2
+        exp_a_ft = (avg_a_ft + avg_h_conc_ft) / 2
+        exp_h_ht = (avg_h_ht + avg_a_conc_ht) / 2
+        exp_a_ht = (avg_a_ht + avg_h_conc_ht) / 2
+
+        def calc_poisson(lam_h, lam_a):
+            probs = np.zeros((6, 6))
+            for i in range(6):
+                for j in range(6):
+                    probs[i][j] = poisson.pmf(i, lam_h) * poisson.pmf(j, lam_a)
+            p1 = np.sum(np.tril(probs, -1))
+            px = np.sum(np.diag(probs))
+            p2 = np.sum(np.triu(probs, 1))
+            return p1, px, p2
+
+        p1_ft, px_ft, p2_ft = calc_poisson(exp_h_ft, exp_a_ft)
+        _, _, _, probs_ht = calc_poisson(exp_h_ht, exp_a_ht), None, None, None # workaround
+        
+        # Ricalcolo specifico HT per 0-0 e U1.5
+        prob_00_ht = poisson.pmf(0, exp_h_ht) * poisson.pmf(0, exp_a_ht)
+        prob_u15_ht = prob_00_ht + (poisson.pmf(1, exp_h_ht) * poisson.pmf(0, exp_a_ht)) + (poisson.pmf(0, exp_h_ht) * poisson.pmf(1, exp_a_ht))
+
+        print(f"\n🎲 PREVISIONI POISSON")
+        print(f"   1° TEMPO:  1 ({calc_poisson(exp_h_ht, exp_a_ht)[0]*100:.1f}%)  X ({calc_poisson(exp_h_ht, exp_a_ht)[1]*100:.1f}%)  2 ({calc_poisson(exp_h_ht, exp_a_ht)[2]*100:.1f}%)")
+        print(f"   FINALE:    1 ({p1_ft*100:.1f}%)  X ({px_ft*100:.1f}%)  2 ({p2_ft*100:.1f}%)")
+        print(f"   SPECIFICHE HT: 0-0 ({prob_00_ht*100:.1f}%) | Under 1.5 ({prob_u15_ht*100:.1f}%)")
+
+        # GRAFICI
+        # 1. Heatmap H2H
+        rows_f = []
+        rows_s = []
+        for t in [sel_h, sel_a]:
+            d = stats_match[t]
+            rows_f.append({**{'SQUADRA': t}, **d['F']})
+            rows_s.append({**{'SQUADRA': t}, **d['S']})
+        
+        df_f = pd.DataFrame(rows_f).set_index('SQUADRA')
+        df_s = pd.DataFrame(rows_s).set_index('SQUADRA')
+
+        fig, axes = plt.subplots(2, 1, figsize=(10, 8))
+        sns.heatmap(df_f[intervals], annot=True, cmap="Greens", fmt="d", cbar=False, ax=axes[0])
+        axes[0].set_title(f'⚽ DENSITÀ GOL FATTI ({sel_h} vs {sel_a})', fontweight='bold')
+        
+        sns.heatmap(df_s[intervals], annot=True, cmap="Reds", fmt="d", cbar=False, ax=axes[1])
+        axes[1].set_title(f'🛡️ DENSITÀ GOL SUBITI ({sel_h} vs {sel_a})', fontweight='bold')
+        
+        plt.tight_layout()
+        plt.show()
+
+        # 2. Kaplan-Meier
+        plt.figure(figsize=(10, 5))
+        kmf_h = KaplanMeierFitter()
+        kmf_a = KaplanMeierFitter()
+        if times_h and times_a:
+            kmf_h.fit(times_h, label=f'{sel_h} Gol')
+            kmf_a.fit(times_a, label=f'{sel_a} Gol')
+            ax = plt.subplot(111)
+            kmf_h.plot_survival_function(ax=ax, ci_show=False, linewidth=3, color='blue')
+            kmf_a.plot_survival_function(ax=ax, ci_show=False, linewidth=3, color='red')
+            plt.title('📉 RITMO GOL (Kaplan-Meier): Probabilità di 0-0')
+            plt.grid(True, alpha=0.3)
+            plt.axvline(45, color='green', linestyle='--')
+            plt.show()
+        else:
+            print("⚠️ Dati insufficienti per il grafico Kaplan-Meier (0 gol segnati).")
+
+btn_run.on_click(run_analysis)
+
+box_sel = widgets.VBox([
+    widgets.Label("SELEZIONE DATI:"),
+    w_file,
+    widgets.HBox([w_paese, w_lega]),
+    widgets.HBox([w_home, w_away]),
+    btn_run
+])
+
+display(box_sel, out)
