@@ -1,14 +1,13 @@
-# @title 💎 DASHBOARD V25: FIX DEFINITIVO MINUTI
+# @title 💎 DASHBOARD V23 FIX: TUTTO FUNZIONANTE (1°T, 2°T, KM, Poisson)
 # @markdown 1. Premi Play ▶️.
-# @markdown 2. Seleziona tutto e premi AVVIA.
+# @markdown 2. Seleziona FILE, LEGA e SQUADRE.
+# @markdown 3. Premi AVVIA.
 
 import sys
 import subprocess
 import os
-import re
-import warnings
 
-# Installazione silenziosa
+# Installazione librerie
 try:
     import lifelines
 except ImportError:
@@ -21,7 +20,10 @@ import numpy as np
 import ipywidgets as widgets
 from IPython.display import display, clear_output
 from lifelines import KaplanMeierFitter
+from lifelines.statistics import logrank_test
 from scipy.stats import poisson
+import warnings
+import re
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
@@ -104,7 +106,7 @@ w_lega = widgets.Dropdown(description='2. 🏆 Lega:', style=style, layout=layou
 w_home = widgets.Dropdown(description='3. 🏠 Casa:', style=style, layout=layout)
 w_away = widgets.Dropdown(description='4. ✈️ Ospite:', style=style, layout=layout)
 
-btn_run = widgets.Button(description="🚀 AVVIA ANALISI", button_style='primary', layout=widgets.Layout(width='100%', margin='15px 0px 0px 0px'))
+btn_run = widgets.Button(description="📊 AVVIA ANALISI COMPLETA", button_style='primary', layout=widgets.Layout(width='100%', margin='15px 0px 0px 0px'))
 out = widgets.Output()
 
 def update_leghe(*args):
@@ -138,43 +140,42 @@ def run_analysis(b):
         clear_output()
         if global_df.empty: return print("❌ Nessun dato.")
         
-        sel_p, sel_l = w_paese.value, w_lega.value
-        sel_h, sel_a = w_home.value, w_away.value
+        sel_paese, sel_lega = w_paese.value, w_lega.value
+        sel_home, sel_away = w_home.value, w_away.value
         
-        print(f"⚙️ ELABORAZIONE: {sel_h} vs {sel_a} ({sel_p} - {sel_l})...\n")
+        print(f"⚙️ ELABORAZIONE: {sel_home} vs {sel_away} ({sel_paese} - {sel_lega})...\n")
         
-        df_league = global_df[(global_df['PAESE'] == sel_p) & (global_df['LEGA'] == sel_l)].copy()
+        df_league = global_df[(global_df['PAESE'] == sel_paese) & (global_df['LEGA'] == sel_lega)].copy()
         intervals = ['0-15', '16-30', '31-45', '46-60', '61-75', '76-90']
         
-        # FUNZIONE ESTRAZIONE MINUTI (ROBUSTA)
         def get_minutes(val):
             if pd.isna(val): return []
-            # Pulisce stringa da caratteri non numerici (tranne punto e virgola che diventano spazi)
-            s = str(val).replace(',', ' ').replace(';', ' ').replace('+', ' ').replace('"', '')
-            # Estrae solo numeri
-            nums = re.findall(r'\d+', s)
+            s = str(val).replace(',', '.').replace(';', ' ')
+            nums = re.findall(r"[-+]?\d*\.\d+|\d+", s)
             res = []
             for x in nums:
                 try:
-                    n = int(x)
-                    # Filtro valori validi per un minuto di gioco
-                    if 0 <= n <= 130: 
-                        res.append(n)
-                except: 
-                    pass
+                    n = int(float(x))
+                    if 0 <= n <= 130: res.append(n)
+                except: pass
             return res
 
         c_h = 'GOALMINH' if 'GOALMINH' in df_league.columns else 'GOALMINCASA'
         c_a = 'GOALMINA' if 'GOALMINA' in df_league.columns else 'GOALMINOSPITE'
 
+        # Accumulatori
         goals_h = {'FT': 0, 'HT': 0, 'S_FT': 0, 'S_HT': 0}
         goals_a = {'FT': 0, 'HT': 0, 'S_FT': 0, 'S_HT': 0}
         match_h, match_a = 0, 0
-        times_h, times_a = [], []
+        
+        # LISTE TEMPI PER KAPLAN-MEIER (DEFINITE QUI PER SICUREZZA)
+        times_h = [] 
+        times_a = []
+        times_league = [] # Media Campionato
         
         stats_match = {
-            sel_h: {'F': {i:0 for i in intervals}, 'S': {i:0 for i in intervals}},
-            sel_a: {'F': {i:0 for i in intervals}, 'S': {i:0 for i in intervals}}
+            sel_home: {'F': {i:0 for i in intervals}, 'S': {i:0 for i in intervals}},
+            sel_away: {'F': {i:0 for i in intervals}, 'S': {i:0 for i in intervals}}
         }
 
         for _, row in df_league.iterrows():
@@ -182,46 +183,49 @@ def run_analysis(b):
             min_h = get_minutes(row.get(c_h))
             min_a = get_minutes(row.get(c_a))
             
-            # Heatmap Logic
+            # Dati Lega (per Media KM)
+            if min_h: times_league.append(min(min_h))
+            if min_a: times_league.append(min(min_a))
+
+            # --- POPOLA HEATMAP ---
             if h in stats_match:
-                for m in min_h:
+                for m in min_h: 
                     idx = min(5, (m-1)//15)
-                    # Fix 46' pt vs st
                     if m > 45 and m <= 60 and idx < 3: idx = 3
                     stats_match[h]['F'][intervals[idx]] += 1
-                for m in min_a:
+                for m in min_a: 
                     idx = min(5, (m-1)//15)
                     if m > 45 and m <= 60 and idx < 3: idx = 3
-                    stats_match[h]['S'][intervals[idx]] += 1
+                    stats_match[h]['S'][intervals[idx]] += 1 
             
             if a in stats_match:
-                for m in min_a:
+                for m in min_a: 
                     idx = min(5, (m-1)//15)
                     if m > 45 and m <= 60 and idx < 3: idx = 3
                     stats_match[a]['F'][intervals[idx]] += 1
-                for m in min_h:
+                for m in min_h: 
                     idx = min(5, (m-1)//15)
                     if m > 45 and m <= 60 and idx < 3: idx = 3
-                    stats_match[a]['S'][intervals[idx]] += 1
+                    stats_match[a]['S'][intervals[idx]] += 1 
 
-            # Stats Medie & Poisson
-            if h == sel_h:
+            # --- DATI STATISTICI ---
+            if h == sel_home:
                 match_h += 1
                 goals_h['FT'] += len(min_h)
                 goals_h['HT'] += len([x for x in min_h if x <= 45])
                 goals_h['S_FT'] += len(min_a)
                 goals_h['S_HT'] += len([x for x in min_a if x <= 45])
-                times_h.extend(min_h)
+                if min_h: times_h.append(min(min_h))
             
-            if a == sel_a:
+            if a == sel_away:
                 match_a += 1
                 goals_a['FT'] += len(min_a)
                 goals_a['HT'] += len([x for x in min_a if x <= 45])
                 goals_a['S_FT'] += len(min_h)
                 goals_a['S_HT'] += len([x for x in min_h if x <= 45])
-                times_a.extend(min_a)
+                if min_a: times_a.append(min(min_a))
 
-        # Medie Sicure
+        # --- CALCOLI MEDIE ---
         def safe_div(n, d): return n / d if d > 0 else 0
 
         avg_h_ft = safe_div(goals_h['FT'], match_h)
@@ -235,16 +239,16 @@ def run_analysis(b):
         avg_a_conc_ht = safe_div(goals_a['S_HT'], match_a)
 
         print(f"\n📊 STATISTICHE MEDIE (Casa vs Fuori)")
-        print(f"{sel_h:<20} | Fatti: {avg_h_ht:.2f} (HT) - {avg_h_ft:.2f} (FT) | Subiti: {avg_h_conc_ht:.2f} (HT) - {avg_h_conc_ft:.2f} (FT)")
-        print(f"{sel_a:<20} | Fatti: {avg_a_ht:.2f} (HT) - {avg_a_ft:.2f} (FT) | Subiti: {avg_a_conc_ht:.2f} (HT) - {avg_a_conc_ft:.2f} (FT)")
+        print(f"{sel_home:<20} | Fatti: {avg_h_ht:.2f} (HT) - {avg_h_ft:.2f} (FT) | Subiti: {avg_h_conc_ht:.2f} (HT) - {avg_h_conc_ft:.2f} (FT)")
+        print(f"{sel_away:<20} | Fatti: {avg_a_ht:.2f} (HT) - {avg_a_ft:.2f} (FT) | Subiti: {avg_a_conc_ht:.2f} (HT) - {avg_a_conc_ft:.2f} (FT)")
 
-        # Poisson
+        # --- POISSON ---
         exp_h_ft = (avg_h_ft + avg_a_conc_ft) / 2
         exp_a_ft = (avg_a_ft + avg_h_conc_ft) / 2
         exp_h_ht = (avg_h_ht + avg_a_conc_ht) / 2
         exp_a_ht = (avg_a_ht + avg_h_conc_ht) / 2
 
-        def calc_poisson(lam_h, lam_a):
+        def calc_poisson_probs(lam_h, lam_a):
             probs = np.zeros((6, 6))
             for i in range(6):
                 for j in range(6):
@@ -254,23 +258,22 @@ def run_analysis(b):
             p2 = np.sum(np.triu(probs, 1))
             return p1, px, p2
 
-        p1_ft, px_ft, p2_ft = calc_poisson(exp_h_ft, exp_a_ft)
-        _, _, _, probs_ht = calc_poisson(exp_h_ht, exp_a_ht), None, None, None # workaround
+        p1_ft, px_ft, p2_ft = calc_poisson_probs(exp_h_ft, exp_a_ft)
         
-        # Ricalcolo specifico HT per 0-0 e U1.5
         prob_00_ht = poisson.pmf(0, exp_h_ht) * poisson.pmf(0, exp_a_ht)
         prob_u15_ht = prob_00_ht + (poisson.pmf(1, exp_h_ht) * poisson.pmf(0, exp_a_ht)) + (poisson.pmf(0, exp_h_ht) * poisson.pmf(1, exp_a_ht))
 
         print(f"\n🎲 PREVISIONI POISSON")
-        print(f"   1° TEMPO:  1 ({calc_poisson(exp_h_ht, exp_a_ht)[0]*100:.1f}%)  X ({calc_poisson(exp_h_ht, exp_a_ht)[1]*100:.1f}%)  2 ({calc_poisson(exp_h_ht, exp_a_ht)[2]*100:.1f}%)")
+        print(f"   1° TEMPO:  1 ({p1_ht*100:.1f}%)  X ({px_ht*100:.1f}%)  2 ({p2_ht*100:.1f}%)") # Nota: Stima HT su lambda HT
         print(f"   FINALE:    1 ({p1_ft*100:.1f}%)  X ({px_ft*100:.1f}%)  2 ({p2_ft*100:.1f}%)")
         print(f"   SPECIFICHE HT: 0-0 ({prob_00_ht*100:.1f}%) | Under 1.5 ({prob_u15_ht*100:.1f}%)")
 
-        # GRAFICI
+        # --- GRAFICI ---
+        
         # 1. Heatmap H2H
         rows_f = []
         rows_s = []
-        for t in [sel_h, sel_a]:
+        for t in [sel_home, sel_away]:
             d = stats_match[t]
             rows_f.append({**{'SQUADRA': t}, **d['F']})
             rows_s.append({**{'SQUADRA': t}, **d['S']})
@@ -280,11 +283,9 @@ def run_analysis(b):
 
         fig, axes = plt.subplots(2, 1, figsize=(10, 8))
         sns.heatmap(df_f[intervals], annot=True, cmap="Greens", fmt="d", cbar=False, ax=axes[0])
-        axes[0].set_title(f'⚽ DENSITÀ GOL FATTI ({sel_h} vs {sel_a})', fontweight='bold')
-        
+        axes[0].set_title(f'⚽ DENSITÀ GOL FATTI ({sel_home} vs {sel_away})', fontweight='bold')
         sns.heatmap(df_s[intervals], annot=True, cmap="Reds", fmt="d", cbar=False, ax=axes[1])
-        axes[1].set_title(f'🛡️ DENSITÀ GOL SUBITI ({sel_h} vs {sel_a})', fontweight='bold')
-        
+        axes[1].set_title(f'🛡️ DENSITÀ GOL SUBITI ({sel_home} vs {sel_away})', fontweight='bold')
         plt.tight_layout()
         plt.show()
 
@@ -292,15 +293,30 @@ def run_analysis(b):
         plt.figure(figsize=(10, 5))
         kmf_h = KaplanMeierFitter()
         kmf_a = KaplanMeierFitter()
+        kmf_l = KaplanMeierFitter()
+        
         if times_h and times_a:
-            kmf_h.fit(times_h, label=f'{sel_h} Gol')
-            kmf_a.fit(times_a, label=f'{sel_a} Gol')
-            ax = plt.subplot(111)
+            kmf_h.fit(times_h, label=f'{sel_home} Gol')
+            kmf_a.fit(times_a, label=f'{sel_away} Gol')
+            
+            # Media Campionato
+            if times_league:
+                kmf_l.fit(times_league, label='Media Campionato')
+                kmf_l.plot_survival_function(ax=plt.gca(), ci_show=False, linewidth=2, color='gray', linestyle='--')
+
+            ax = plt.gca()
             kmf_h.plot_survival_function(ax=ax, ci_show=False, linewidth=3, color='blue')
             kmf_a.plot_survival_function(ax=ax, ci_show=False, linewidth=3, color='red')
-            plt.title('📉 RITMO GOL (Kaplan-Meier): Probabilità di 0-0')
+            
+            # Mediana
+            med_h = kmf_h.median_survival_time_
+            med_a = kmf_a.median_survival_time_
+            plt.axhline(y=0.5, color='green', linestyle=':', label='Mediana (50%)')
+            
+            plt.title(f'📉 RITMO GOL: {sel_home} (~{med_h:.0f}\') vs {sel_away} (~{med_a:.0f}\')')
             plt.grid(True, alpha=0.3)
             plt.axvline(45, color='green', linestyle='--')
+            plt.legend()
             plt.show()
         else:
             print("⚠️ Dati insufficienti per il grafico Kaplan-Meier (0 gol segnati).")
