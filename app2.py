@@ -4,16 +4,15 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import numpy as np
 from lifelines import KaplanMeierFitter
-from lifelines.statistics import logrank_test
 from scipy.stats import poisson
 import warnings
 import re
 
-# Configurazione Pagina
+# --- CONFIGURAZIONE PAGINA (DEVE ESSERE LA PRIMA ISTRUZIONE ST) ---
 st.set_page_config(page_title="⚽ Football Analytics V22", layout="wide", page_icon="⚽")
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
-# Titolo e Intestazione
+# Titolo
 st.title("💎 Dashboard Analisi Calcio V22")
 st.markdown("""
 **Strumento Professionale di Analisi Statistica e Predittiva**
@@ -312,7 +311,7 @@ if st.button("🚀 AVVIA ANALISI MATCH", type="primary"):
         else:
             st.warning("Dati insufficienti per il grafico del Ritmo.")
 
-    # Preparazione Dataframe Heatmap
+    # Preparazione Heatmap Dataframes
     rows_f = []
     rows_s = []
     for t in [sel_home, sel_away]:
